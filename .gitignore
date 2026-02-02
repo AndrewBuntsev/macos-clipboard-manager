@@ -1,0 +1,32 @@
+# Build outputs
+bin/
+obj/
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.rsuser
+*.csproj.user
+*.sln.docstates
+
+# IDEs
+.vs/
+.idea/
+
+# Logs and temp
+*.log
+*.tmp
+*.cache
+
+# macOS
+.DS_Store
+*.dSYM/
+*.app/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+packages.lock.json

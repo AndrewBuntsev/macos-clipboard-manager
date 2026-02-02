@@ -1,0 +1,5 @@
+Debugging Notes:
+
+dotnet build -c Debug
+dotnet run
+attach to process
