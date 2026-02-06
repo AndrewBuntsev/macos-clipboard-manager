@@ -30,8 +30,12 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
                 Editable = false,
                 Bordered = false,
                 DrawsBackground = false,
-                LineBreakMode = NSLineBreakMode.TruncatingTail
+                LineBreakMode = NSLineBreakMode.ByWordWrapping,
+                Font = NSFont.SystemFontOfSize(11)
             };
+            tf.Cell.Wraps = true;
+            tf.Cell.Scrollable = false;
+            tf.Cell.UsesSingleLineMode = false;
 
             tf.TranslatesAutoresizingMaskIntoConstraints = false;
             cell.AddSubview(tf);
@@ -40,8 +44,8 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
             // Simple padding + full width/height constraints
             NSLayoutConstraint.ActivateConstraints(new[]
             {
-                tf.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 10),
-                tf.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, -10),
+                tf.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 0),
+                tf.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, 0),
                 tf.TopAnchor.ConstraintEqualTo(cell.TopAnchor, 6),
                 tf.BottomAnchor.ConstraintEqualTo(cell.BottomAnchor, -6),
             });

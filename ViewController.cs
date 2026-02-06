@@ -1,6 +1,7 @@
 using ObjCRuntime;
 using AppKit;
 using Foundation;
+using CoreGraphics;
 
 namespace cbm;
 
@@ -60,8 +61,10 @@ public partial class ViewController : NSViewController {
         {
             HeaderView = null,            // no column header
             UsesAlternatingRowBackgroundColors = true,
-            RowHeight = 44
+            RowHeight = 60
         };
+        table.Style = NSTableViewStyle.FullWidth;
+        table.IntercellSpacing = new CGSize(0, 0);
 
         var col = new NSTableColumn("text")
         {
@@ -69,6 +72,12 @@ public partial class ViewController : NSViewController {
             Editable = false
         };
         table.AddColumn(col);
+
+        // Make the single column fill available width
+        table.ColumnAutoresizingStyle = NSTableViewColumnAutoresizingStyle.LastColumnOnly;
+        table.AutoresizingMask = NSViewResizingMask.WidthSizable | NSViewResizingMask.HeightSizable;
+        table.Frame = scroll.ContentView.Bounds;
+        col.Width = table.Frame.Width;
 
         _ds = new HistoryTableDataSource(watcher);
         _del = new HistoryTableDelegate(watcher);
