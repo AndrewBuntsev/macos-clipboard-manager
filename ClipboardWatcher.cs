@@ -73,19 +73,33 @@ public sealed class ClipboardWatcher : IDisposable
     }
 
     public void Activate(string text)
-{
-    // Write back to clipboard
-    _pb.ClearContents();
-    _pb.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
+    {
+        // Write back to clipboard
+        _pb.ClearContents();
+        _pb.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
 
-    // Move item to top (MRU behavior)
-    _history.Remove(text);
-    _history.Insert(0, text);
+        // Move item to top (MRU behavior)
+        _history.Remove(text);
+        _history.Insert(0, text);
 
-    _lastText = text;
+        _lastText = text;
 
-    Log.Info($"activated clipboard item");
-}
+        Log.Info($"activated clipboard item");
+    }
+
+    public bool RemoveAt(int index)
+    {
+        if (index < 0 || index >= _history.Count)
+            return false;
+
+        var removed = _history[index];
+        _history.RemoveAt(index);
+
+        if (_lastText == removed)
+            _lastText = null;
+
+        return true;
+    }
 
     private static string TrimForLog(string s)
     {

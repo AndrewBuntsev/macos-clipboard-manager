@@ -7,23 +7,26 @@ namespace cbm;
 public sealed class HistoryTableDelegate : NSTableViewDelegate
 {
     private readonly ClipboardWatcher _watcher;
+    private readonly NSTableView _table;
     private bool _suppressSelection;
 
     private const string CellId = "HistoryCell";
 
-    public HistoryTableDelegate(ClipboardWatcher watcher)
+    public HistoryTableDelegate(ClipboardWatcher watcher, NSTableView table)
     {
         _watcher = watcher;
+        _table = table;
     }
 
     public override NSView GetViewForItem(NSTableView tableView, NSTableColumn tableColumn, nint row)
     {
         var text = _watcher.History[(int)row];
 
-        var cell = tableView.MakeView(CellId, this) as NSTableCellView;
+        var cell = tableView.MakeView(CellId, this) as HoverTableCellView;
         if (cell == null)
         {
-            cell = new NSTableCellView { Identifier = CellId };
+            cell = new HoverTableCellView { Identifier = CellId };
+            cell.CloseButton.Activated += CloseButtonActivated;
 
             var tf = new NSTextField
             {
@@ -45,12 +48,14 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
             NSLayoutConstraint.ActivateConstraints(new[]
             {
                 tf.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 0),
-                tf.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, 0),
+                tf.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, -18),
                 tf.TopAnchor.ConstraintEqualTo(cell.TopAnchor, 6),
                 tf.BottomAnchor.ConstraintEqualTo(cell.BottomAnchor, -6),
             });
         }
 
+        cell.CloseButton.Tag = row;
+        cell.CloseButton.Hidden = true;
         cell.TextField!.StringValue = TrimForDisplay(text);
         return cell;
     }
@@ -97,6 +102,30 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         }
     }
 
+    private void CloseButtonActivated(object? sender, EventArgs e)
+    {
+        if (sender is not NSButton button)
+            return;
+
+        var row = (int)button.Tag;
+        if (row < 0 || row >= _watcher.History.Count)
+            return;
+
+        PerformSelectionSilently(() =>
+        {
+            if (!_watcher.RemoveAt(row))
+                return;
+
+            _table.ReloadData();
+
+            if (_table.RowCount > 0)
+            {
+                var nextRow = Math.Min(row, (int)_table.RowCount - 1);
+                _table.SelectRow(nextRow, byExtendingSelection: false);
+                _table.ScrollRowToVisible(nextRow);
+            }
+        });
+    }
 
     private static string TrimForDisplay(string s)
     {

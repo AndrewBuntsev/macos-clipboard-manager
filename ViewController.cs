@@ -80,7 +80,7 @@ public partial class ViewController : NSViewController {
         col.Width = table.Frame.Width;
 
         _ds = new HistoryTableDataSource(watcher);
-        _del = new HistoryTableDelegate(watcher);
+        _del = new HistoryTableDelegate(watcher, table);
 
         table.DataSource = _ds;
         table.Delegate = _del;
