@@ -57,7 +57,7 @@ public partial class ViewController : NSViewController {
             scroll.BottomAnchor.ConstraintEqualTo(View.BottomAnchor)
         });
 
-        var table = new NSTableView
+        var table = new HistoryTableView
         {
             HeaderView = null,            // no column header
             UsesAlternatingRowBackgroundColors = true,
