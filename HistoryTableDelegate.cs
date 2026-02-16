@@ -57,6 +57,8 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         cell.CloseButton.Tag = row;
         cell.CloseButton.Hidden = true;
         cell.TextField!.StringValue = TrimForDisplay(text);
+        cell.ToolTip = text;
+        cell.TextField.ToolTip = text;
         return cell;
     }
 
