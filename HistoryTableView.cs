@@ -1,7 +1,8 @@
-using AppKit;
-
 namespace cbm;
 
+/// <summary>
+/// Custom NSTableView to handle right-click selection without activating the window first.
+/// </summary>
 public sealed class HistoryTableView : NSTableView
 {
     public override bool AcceptsFirstMouse(NSEvent theEvent)

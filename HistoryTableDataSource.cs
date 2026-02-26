@@ -1,6 +1,3 @@
-using AppKit;
-using Foundation;
-
 namespace cbm;
 
 public sealed class HistoryTableDataSource : NSTableViewDataSource
@@ -12,6 +9,5 @@ public sealed class HistoryTableDataSource : NSTableViewDataSource
         _watcher = watcher;
     }
 
-    public override nint GetRowCount(NSTableView tableView)
-        => _watcher.History.Count;
+    public override nint GetRowCount(NSTableView tableView) => _watcher.History.Count;
 }

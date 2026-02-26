@@ -4,10 +4,14 @@ using AppKit;
 using Foundation;
 using CoreGraphics;
 
+/// <summary>
+/// Main application delegate that sets up the clipboard watcher and configures the main window as a sidebar.
+/// </summary>
 [Register ("AppDelegate")]
 public class AppDelegate : NSApplicationDelegate {
-	private ClipboardWatcher? _watcher;
-    public ClipboardWatcher Watcher => _watcher ??= new ClipboardWatcher(0.25);
+	private ClipboardWatcher? clipboardWatcher;
+
+    public ClipboardWatcher Watcher => clipboardWatcher ??= new ClipboardWatcher(0.25);
 
 	public override void DidFinishLaunching (NSNotification notification)
 	{
@@ -16,8 +20,6 @@ public class AppDelegate : NSApplicationDelegate {
 		Watcher.OnNewText += text =>
 		{
 			Log.Info($"Copied text: {text}");
-			// For now, just confirm it’s captured (you’ll see this in terminal output)
-			// Later we’ll update the UI list.
 		};
 
 		var window = NSApplication.SharedApplication.MainWindow;
@@ -56,7 +58,7 @@ public class AppDelegate : NSApplicationDelegate {
 	public override void WillTerminate (NSNotification notification)
 	{
 		// Insert code here to tear down your application
-		_watcher?.Dispose();
-		_watcher = null;
+		clipboardWatcher?.Dispose();
+		clipboardWatcher = null;
 	}
 }

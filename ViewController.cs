@@ -1,14 +1,11 @@
 using ObjCRuntime;
-using AppKit;
-using Foundation;
-using CoreGraphics;
 
 namespace cbm;
 
+/// <summary>
+/// Main view controller that sets up the UI to display clipboard history and handles interactions.
+/// </summary>
 public partial class ViewController : NSViewController {
-	private NSTableView? _table;
-    private HistoryTableDataSource? _ds;
-    private HistoryTableDelegate? _del;
 	protected ViewController (NativeHandle handle) : base (handle)
 	{
 		// This constructor is required if the view controller is loaded from a xib or a storyboard.
@@ -44,9 +41,9 @@ public partial class ViewController : NSViewController {
         var scroll = new NSScrollView
         {
             HasVerticalScroller = true,
-            AutohidesScrollers = true
+            AutohidesScrollers = true,
+            TranslatesAutoresizingMaskIntoConstraints = false
         };
-        scroll.TranslatesAutoresizingMaskIntoConstraints = false;
         View.AddSubview(scroll);
 
         NSLayoutConstraint.ActivateConstraints(new[]
@@ -59,12 +56,12 @@ public partial class ViewController : NSViewController {
 
         var table = new HistoryTableView
         {
-            HeaderView = null,            // no column header
+            HeaderView = null,
             UsesAlternatingRowBackgroundColors = true,
-            RowHeight = 60
+            RowHeight = 60,
+            Style = NSTableViewStyle.FullWidth,
+            IntercellSpacing = new CGSize(0, 0)
         };
-        table.Style = NSTableViewStyle.FullWidth;
-        table.IntercellSpacing = new CGSize(0, 0);
 
         var col = new NSTableColumn("text")
         {
@@ -78,49 +75,42 @@ public partial class ViewController : NSViewController {
         table.AutoresizingMask = NSViewResizingMask.WidthSizable | NSViewResizingMask.HeightSizable;
         table.Frame = scroll.ContentView.Bounds;
         col.Width = table.Frame.Width;
-
-        _ds = new HistoryTableDataSource(watcher);
-        _del = new HistoryTableDelegate(watcher, table);
-
-        table.DataSource = _ds;
-        table.Delegate = _del;
-
+        table.DataSource = new HistoryTableDataSource(watcher);
+        table.Delegate = new HistoryTableDelegate(watcher, table);
         scroll.DocumentView = table;
-        _table = table;
 
         // Refresh UI when clipboard changes
-        watcher.OnNewText += _ =>
+        watcher.OnNewText += (_) =>
         {
             // Must update UI on main thread
             BeginInvokeOnMainThread(() =>
             {
-                if (_table == null)
+                if (table == null)
                     return;
 
-                _del?.PerformSelectionSilently(() =>
+                (table.Delegate as HistoryTableDelegate)?.PerformSelectionSilently(() =>
                 {
-                    _table.ReloadData();
+                    table.ReloadData();
 
                     // Select the newest item (row 0) if exists
-                    if (_table.RowCount > 0)
+                    if (table.RowCount > 0)
                     {
-                        _table.SelectRow(0, byExtendingSelection: false);
-                        _table.ScrollRowToVisible(0);
+                        table.SelectRow(0, byExtendingSelection: false);
+                        table.ScrollRowToVisible(0);
                     }
                 });
             });
         };
 
         // Initial load
-        _table.ReloadData();
+        table.ReloadData();
 	}
 
 	public override NSObject RepresentedObject {
 		get => base.RepresentedObject;
-		set {
+		set
+        {
 			base.RepresentedObject = value;
-
-			// Update the view, if already loaded.
 		}
 	}
 }

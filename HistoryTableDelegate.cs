@@ -1,34 +1,35 @@
-using System;
-using AppKit;
-using Foundation;
-
 namespace cbm;
 
+/// <summary>
+/// Delegate for the history table view, responsible for providing cell views and handling selection.
+/// </summary>
 public sealed class HistoryTableDelegate : NSTableViewDelegate
 {
-    private readonly ClipboardWatcher _watcher;
-    private readonly NSTableView _table;
-    private bool _suppressSelection;
+    private const string CELL_ID = "HistoryCell";
 
-    private const string CellId = "HistoryCell";
+    private readonly ClipboardWatcher clipboardWatcher;
+    private readonly NSTableView table;
+    private bool suppressSelection;
 
-    public HistoryTableDelegate(ClipboardWatcher watcher, NSTableView table)
+    
+
+    public HistoryTableDelegate(ClipboardWatcher clipboardWatcher, NSTableView table)
     {
-        _watcher = watcher;
-        _table = table;
+        this.clipboardWatcher = clipboardWatcher;
+        this.table = table;
     }
 
     public override NSView GetViewForItem(NSTableView tableView, NSTableColumn tableColumn, nint row)
     {
-        var text = _watcher.History[(int)row];
+        var text = clipboardWatcher.History[(int)row];
 
-        var cell = tableView.MakeView(CellId, this) as HoverTableCellView;
+        var cell = tableView.MakeView(CELL_ID, this) as HoverTableCellView;
         if (cell == null)
         {
-            cell = new HoverTableCellView { Identifier = CellId };
+            cell = new HoverTableCellView { Identifier = CELL_ID };
             cell.CloseButton.Activated += CloseButtonActivated;
 
-            var tf = new NSTextField
+            var textField = new NSTextField
             {
                 Editable = false,
                 Bordered = false,
@@ -36,21 +37,21 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
                 LineBreakMode = NSLineBreakMode.ByWordWrapping,
                 Font = NSFont.SystemFontOfSize(11)
             };
-            tf.Cell.Wraps = true;
-            tf.Cell.Scrollable = false;
-            tf.Cell.UsesSingleLineMode = false;
+            textField.Cell.Wraps = true;
+            textField.Cell.Scrollable = false;
+            textField.Cell.UsesSingleLineMode = false;
 
-            tf.TranslatesAutoresizingMaskIntoConstraints = false;
-            cell.AddSubview(tf);
-            cell.TextField = tf;
+            textField.TranslatesAutoresizingMaskIntoConstraints = false;
+            cell.AddSubview(textField);
+            cell.TextField = textField;
 
             // Simple padding + full width/height constraints
             NSLayoutConstraint.ActivateConstraints(new[]
             {
-                tf.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 0),
-                tf.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, -18),
-                tf.TopAnchor.ConstraintEqualTo(cell.TopAnchor, 6),
-                tf.BottomAnchor.ConstraintEqualTo(cell.BottomAnchor, -6),
+                textField.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 0),
+                textField.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, -18),
+                textField.TopAnchor.ConstraintEqualTo(cell.TopAnchor, 6),
+                textField.BottomAnchor.ConstraintEqualTo(cell.BottomAnchor, -6),
             });
         }
 
@@ -64,43 +65,43 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
 
     public override void SelectionDidChange(NSNotification notification)
     {
-        if (_suppressSelection)
+        if (suppressSelection)
             return;
 
         if (notification.Object is not NSTableView table)
             return;
 
         var row = (int)table.SelectedRow;
-        if (row < 0 || row >= _watcher.History.Count)
+        if (row < 0 || row >= clipboardWatcher.History.Count)
             return;
 
-        var selected = _watcher.History[row];
+        var selected = clipboardWatcher.History[row];
 
         // Copy back + move to top without re-triggering selection events
-        _suppressSelection = true;
+        suppressSelection = true;
         try
         {
-            _watcher.Activate(selected);
+            clipboardWatcher.Activate(selected);
             table.ReloadData();
             table.SelectRow(0, byExtendingSelection: false);
             table.ScrollRowToVisible(0);
         }
         finally
         {
-            _suppressSelection = false;
+            suppressSelection = false;
         }
     }
 
     public void PerformSelectionSilently(Action action)
     {
-        _suppressSelection = true;
+        suppressSelection = true;
         try
         {
             action();
         }
         finally
         {
-            _suppressSelection = false;
+            suppressSelection = false;
         }
     }
 
@@ -110,21 +111,21 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
             return;
 
         var row = (int)button.Tag;
-        if (row < 0 || row >= _watcher.History.Count)
+        if (row < 0 || row >= clipboardWatcher.History.Count)
             return;
 
         PerformSelectionSilently(() =>
         {
-            if (!_watcher.RemoveAt(row))
+            if (!clipboardWatcher.RemoveAt(row))
                 return;
 
-            _table.ReloadData();
+            table.ReloadData();
 
-            if (_table.RowCount > 0)
+            if (table.RowCount > 0)
             {
-                var nextRow = Math.Min(row, (int)_table.RowCount - 1);
-                _table.SelectRow(nextRow, byExtendingSelection: false);
-                _table.ScrollRowToVisible(nextRow);
+                var nextRow = Math.Min(row, (int)table.RowCount - 1);
+                table.SelectRow(nextRow, byExtendingSelection: false);
+                table.ScrollRowToVisible(nextRow);
             }
         });
     }

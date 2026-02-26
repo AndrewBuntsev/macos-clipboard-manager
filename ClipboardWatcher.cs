@@ -1,51 +1,51 @@
-using System;
-using System.Collections.Generic;
-using AppKit;
-using Foundation;
-
 namespace cbm;
 
+/// <summary>
+/// Watches the clipboard for changes, keeps a history, and allows activating items back to the clipboard.
+/// </summary>
 public sealed class ClipboardWatcher : IDisposable
 {
-    private readonly NSPasteboard _pb = NSPasteboard.GeneralPasteboard;
-    private readonly NSTimer _timer;
+    private const int MAX_CHARS = 50_000;
+    private const int MAX_ITEMS = 100;
 
-    private int _lastChangeCount;
-    private string? _lastText;
+    private readonly NSPasteboard pasteboard = NSPasteboard.GeneralPasteboard;
+    private readonly NSTimer timer;
+    private int lastChangeCount;
+    private string? lastText;
+    private readonly List<string> history = new();
 
     // Simple in-memory history (most recent first)
-    public IReadOnlyList<string> History => _history;
-    private readonly List<string> _history = new();
-
+    public IReadOnlyList<string> History => history;
+    // Event raised when new text is copied to the clipboard
     public event Action<string>? OnNewText;
+    
 
     public ClipboardWatcher(double pollSeconds = 0.25)
     {
         Log.Info("[cbm] ClipboardWatcher started");
-        _lastChangeCount = (int)_pb.ChangeCount;
+        lastChangeCount = (int)pasteboard.ChangeCount;
 
         // Run on main runloop (safe for AppKit usage)
-        _timer = NSTimer.CreateRepeatingScheduledTimer(
+        timer = NSTimer.CreateRepeatingScheduledTimer(
             TimeSpan.FromSeconds(pollSeconds),
-            _ => PollOnce()
+            (_) => PollOnce()
         );
     }
 
     private void PollOnce()
     {
-        var cc = _pb.ChangeCount;
-        if (cc == _lastChangeCount) return;
-
-        _lastChangeCount = (int)cc;
+        var changeCount = pasteboard.ChangeCount;
+        if (changeCount == lastChangeCount) return;
+        lastChangeCount = (int)changeCount;
 
         // Text only for now. (Later: images, files, RTF/HTML)
-        var text = _pb.GetStringForType(NSPasteboard.NSPasteboardTypeString);
+        var text = pasteboard.GetStringForType(NSPasteboard.NSPasteboardTypeString);
 
         if (string.IsNullOrEmpty(text)) return;
 
         // Dedupe repeated updates that keep same text
-        if (text == _lastText) return;
-        _lastText = text;
+        if (text == lastText) return;
+        lastText = text;
 
         AddToHistory(text);
 
@@ -57,46 +57,42 @@ public sealed class ClipboardWatcher : IDisposable
 
     private void AddToHistory(string text)
     {
-        // Optional: collapse very large entries for memory safety (tweak later)
-        const int maxChars = 50_000;
-        if (text.Length > maxChars)
-            text = text[..maxChars];
+        if (text.Length > MAX_CHARS)
+            text = text[..MAX_CHARS];
 
         // Keep newest first, avoid duplicates
-        _history.Remove(text);
-        _history.Insert(0, text);
+        history.Remove(text);
+        history.Insert(0, text);
 
-        // Cap history length (tweak later)
-        const int maxItems = 100;
-        if (_history.Count > maxItems)
-            _history.RemoveRange(maxItems, _history.Count - maxItems);
+        if (history.Count > MAX_ITEMS)
+            history.RemoveRange(MAX_ITEMS, history.Count - MAX_ITEMS);
     }
 
     public void Activate(string text)
     {
         // Write back to clipboard
-        _pb.ClearContents();
-        _pb.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
+        pasteboard.ClearContents();
+        pasteboard.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
 
         // Move item to top (MRU behavior)
-        _history.Remove(text);
-        _history.Insert(0, text);
+        history.Remove(text);
+        history.Insert(0, text);
 
-        _lastText = text;
+        lastText = text;
 
         Log.Info($"activated clipboard item");
     }
 
     public bool RemoveAt(int index)
     {
-        if (index < 0 || index >= _history.Count)
+        if (index < 0 || index >= history.Count)
             return false;
 
-        var removed = _history[index];
-        _history.RemoveAt(index);
+        var removed = history[index];
+        history.RemoveAt(index);
 
-        if (_lastText == removed)
-            _lastText = null;
+        if (lastText == removed)
+            lastText = null;
 
         return true;
     }
@@ -109,7 +105,7 @@ public sealed class ClipboardWatcher : IDisposable
 
     public void Dispose()
     {
-        _timer.Invalidate();
-        _timer.Dispose();
+        timer.Invalidate();
+        timer.Dispose();
     }
 }

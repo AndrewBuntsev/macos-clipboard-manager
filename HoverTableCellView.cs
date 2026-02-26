@@ -1,12 +1,12 @@
-using AppKit;
-using CoreGraphics;
-using Foundation;
-
 namespace cbm;
 
+/// <summary>
+/// Custom NSTableCellView that shows a close button on hover, allowing individual items to be removed from the history.
+/// </summary>
 public sealed class HoverTableCellView : NSTableCellView
 {
-    private NSTrackingArea? _trackingArea;
+    private NSTrackingArea? trackingArea;
+
     public NSButton CloseButton { get; }
 
     public HoverTableCellView()
@@ -39,10 +39,10 @@ public sealed class HoverTableCellView : NSTableCellView
 
     public override void UpdateTrackingAreas()
     {
-        if (_trackingArea != null)
-            RemoveTrackingArea(_trackingArea);
+        if (trackingArea != null)
+            RemoveTrackingArea(trackingArea);
 
-        _trackingArea = new NSTrackingArea(
+        trackingArea = new NSTrackingArea(
             Bounds,
             NSTrackingAreaOptions.ActiveInKeyWindow |
             NSTrackingAreaOptions.MouseEnteredAndExited |
@@ -50,7 +50,7 @@ public sealed class HoverTableCellView : NSTableCellView
             this,
             null);
 
-        AddTrackingArea(_trackingArea);
+        AddTrackingArea(trackingArea);
         base.UpdateTrackingAreas();
     }
 
