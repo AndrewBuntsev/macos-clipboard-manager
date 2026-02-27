@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace cbm;
 
 /// <summary>
@@ -10,6 +12,7 @@ public sealed class ClipboardWatcher : IDisposable
 
     private readonly NSPasteboard pasteboard = NSPasteboard.GeneralPasteboard;
     private readonly NSTimer timer;
+    private readonly string historyPath;
     private int lastChangeCount;
     private string? lastText;
     private readonly List<string> history = new();
@@ -24,6 +27,8 @@ public sealed class ClipboardWatcher : IDisposable
     {
         Log.Info("[cbm] ClipboardWatcher started");
         lastChangeCount = (int)pasteboard.ChangeCount;
+        historyPath = BuildHistoryPath();
+        LoadHistory();
 
         // Run on main runloop (safe for AppKit usage)
         timer = NSTimer.CreateRepeatingScheduledTimer(
@@ -57,8 +62,7 @@ public sealed class ClipboardWatcher : IDisposable
 
     private void AddToHistory(string text)
     {
-        if (text.Length > MAX_CHARS)
-            text = text[..MAX_CHARS];
+        text = Normalize(text);
 
         // Keep newest first, avoid duplicates
         history.Remove(text);
@@ -66,10 +70,14 @@ public sealed class ClipboardWatcher : IDisposable
 
         if (history.Count > MAX_ITEMS)
             history.RemoveRange(MAX_ITEMS, history.Count - MAX_ITEMS);
+
+        SaveHistory();
     }
 
     public void Activate(string text)
     {
+        text = Normalize(text);
+
         // Write back to clipboard
         pasteboard.ClearContents();
         pasteboard.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
@@ -77,8 +85,11 @@ public sealed class ClipboardWatcher : IDisposable
         // Move item to top (MRU behavior)
         history.Remove(text);
         history.Insert(0, text);
+        if (history.Count > MAX_ITEMS)
+            history.RemoveRange(MAX_ITEMS, history.Count - MAX_ITEMS);
 
         lastText = text;
+        SaveHistory();
 
         Log.Info($"activated clipboard item");
     }
@@ -90,6 +101,7 @@ public sealed class ClipboardWatcher : IDisposable
 
         var removed = history[index];
         history.RemoveAt(index);
+        SaveHistory();
 
         if (lastText == removed)
             lastText = null;
@@ -108,4 +120,73 @@ public sealed class ClipboardWatcher : IDisposable
         timer.Invalidate();
         timer.Dispose();
     }
+
+    private void LoadHistory()
+    {
+        try
+        {
+            if (!File.Exists(historyPath))
+                return;
+
+            var json = File.ReadAllText(historyPath);
+            var loaded = JsonSerializer.Deserialize(
+                json,
+                ClipboardHistoryJsonContext.Default.ListString
+            );
+            if (loaded == null)
+                return;
+
+            foreach (var item in loaded)
+            {
+                if (string.IsNullOrWhiteSpace(item))
+                    continue;
+
+                var normalized = Normalize(item);
+                if (history.Contains(normalized))
+                    continue;
+
+                history.Add(normalized);
+                if (history.Count >= MAX_ITEMS)
+                    break;
+            }
+
+            if (history.Count > 0)
+                lastText = history[0];
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"failed to load clipboard history: {ex.Message}");
+        }
+    }
+
+    private void SaveHistory()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(historyPath);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            File.WriteAllText(
+                historyPath,
+                JsonSerializer.Serialize(
+                    history,
+                    ClipboardHistoryJsonContext.Default.ListString
+                )
+            );
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"failed to save clipboard history: {ex.Message}");
+        }
+    }
+
+    private static string BuildHistoryPath()
+    {
+        var appSupport = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        return Path.Combine(appSupport, "cbm", "history.json");
+    }
+
+    private static string Normalize(string text) =>
+        text.Length <= MAX_CHARS ? text : text[..MAX_CHARS];
 }

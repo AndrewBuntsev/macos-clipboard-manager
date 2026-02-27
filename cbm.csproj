@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>true</ImplicitUsings>
     <SupportedOSPlatformVersion>12.0</SupportedOSPlatformVersion>
+    <ValidateXcodeVersion Condition="'$(Configuration)' == 'Debug'">false</ValidateXcodeVersion>
 
     <!--
       Enable full trimming in Release mode.
