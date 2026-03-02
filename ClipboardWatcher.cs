@@ -15,13 +15,13 @@ public sealed class ClipboardWatcher : IDisposable
     private readonly string historyPath;
     private int lastChangeCount;
     private string? lastText;
-    private readonly List<string> history = new();
+    private readonly List<ClipboardHistoryItem> history = new();
 
-    // Simple in-memory history (most recent first)
-    public IReadOnlyList<string> History => history;
+    // Pinned items are always first and preserve pin order.
+    public IReadOnlyList<ClipboardHistoryItem> History => history;
     // Event raised when new text is copied to the clipboard
     public event Action<string>? OnNewText;
-    
+
 
     public ClipboardWatcher(double pollSeconds = 0.25)
     {
@@ -64,12 +64,25 @@ public sealed class ClipboardWatcher : IDisposable
     {
         text = Normalize(text);
 
-        // Keep newest first, avoid duplicates
-        history.Remove(text);
-        history.Insert(0, text);
+        var existingIndex = IndexOf(text);
+        if (existingIndex >= 0)
+        {
+            if (history[existingIndex].IsPinned)
+                return;
 
-        if (history.Count > MAX_ITEMS)
-            history.RemoveRange(MAX_ITEMS, history.Count - MAX_ITEMS);
+            var pinnedCount = GetPinnedCount();
+            if (existingIndex == pinnedCount)
+                return;
+
+            var existing = history[existingIndex];
+            history.RemoveAt(existingIndex);
+            history.Insert(pinnedCount, existing);
+            SaveHistory();
+            return;
+        }
+
+        history.Insert(GetPinnedCount(), new ClipboardHistoryItem(text, IsPinned: false));
+        TrimToLimit();
 
         SaveHistory();
     }
@@ -82,14 +95,32 @@ public sealed class ClipboardWatcher : IDisposable
         pasteboard.ClearContents();
         pasteboard.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
 
-        // Move item to top (MRU behavior)
-        history.Remove(text);
-        history.Insert(0, text);
-        if (history.Count > MAX_ITEMS)
-            history.RemoveRange(MAX_ITEMS, history.Count - MAX_ITEMS);
+        var changed = false;
+        var existingIndex = IndexOf(text);
+        if (existingIndex >= 0)
+        {
+            var selected = history[existingIndex];
+            if (!selected.IsPinned)
+            {
+                var pinnedCount = GetPinnedCount();
+                if (existingIndex != pinnedCount)
+                {
+                    history.RemoveAt(existingIndex);
+                    history.Insert(pinnedCount, selected);
+                    changed = true;
+                }
+            }
+        }
+        else
+        {
+            history.Insert(GetPinnedCount(), new ClipboardHistoryItem(text, IsPinned: false));
+            TrimToLimit();
+            changed = true;
+        }
 
         lastText = text;
-        SaveHistory();
+        if (changed)
+            SaveHistory();
 
         Log.Info($"activated clipboard item");
     }
@@ -99,7 +130,7 @@ public sealed class ClipboardWatcher : IDisposable
         if (index < 0 || index >= history.Count)
             return false;
 
-        var removed = history[index];
+        var removed = history[index].Text;
         history.RemoveAt(index);
         SaveHistory();
 
@@ -107,6 +138,30 @@ public sealed class ClipboardWatcher : IDisposable
             lastText = null;
 
         return true;
+    }
+
+    public bool TogglePinnedAt(int index)
+    {
+        if (index < 0 || index >= history.Count)
+            return false;
+
+        var item = history[index];
+        if (item.IsPinned)
+            return UnpinAt(index, item);
+
+        return PinAt(index, item);
+    }
+
+    public int IndexOf(string text)
+    {
+        text = Normalize(text);
+        for (var i = 0; i < history.Count; i++)
+        {
+            if (history[i].Text == text)
+                return i;
+        }
+
+        return -1;
     }
 
     private static string TrimForLog(string s)
@@ -129,29 +184,63 @@ public sealed class ClipboardWatcher : IDisposable
                 return;
 
             var json = File.ReadAllText(historyPath);
-            var loaded = JsonSerializer.Deserialize(
-                json,
-                ClipboardHistoryJsonContext.Default.ListString
-            );
+            var loadedFromLegacy = false;
+            var loaded = TryDeserializeHistoryItems(json);
+            if (loaded == null)
+            {
+                var legacy = JsonSerializer.Deserialize(
+                    json,
+                    ClipboardHistoryJsonContext.Default.ListString
+                );
+                if (legacy != null)
+                {
+                    loaded = new List<ClipboardHistoryItem>(legacy.Count);
+                    foreach (var item in legacy)
+                    {
+                        loaded.Add(new ClipboardHistoryItem(item, IsPinned: false));
+                    }
+
+                    loadedFromLegacy = true;
+                }
+            }
+
             if (loaded == null)
                 return;
 
+            var changed = loadedFromLegacy;
+            var pinnedSectionClosed = false;
+
             foreach (var item in loaded)
             {
-                if (string.IsNullOrWhiteSpace(item))
+                if (string.IsNullOrWhiteSpace(item.Text))
                     continue;
 
-                var normalized = Normalize(item);
-                if (history.Contains(normalized))
+                var normalized = Normalize(item.Text);
+                if (IndexOf(normalized) >= 0)
+                {
+                    changed = true;
                     continue;
+                }
 
-                history.Add(normalized);
+                var isPinned = item.IsPinned && !pinnedSectionClosed;
+                if (!item.IsPinned && !pinnedSectionClosed)
+                    pinnedSectionClosed = true;
+                if (item.IsPinned && pinnedSectionClosed)
+                    changed = true;
+
+                if (normalized != item.Text)
+                    changed = true;
+
+                history.Add(new ClipboardHistoryItem(normalized, isPinned));
                 if (history.Count >= MAX_ITEMS)
                     break;
             }
 
             if (history.Count > 0)
-                lastText = history[0];
+                lastText = history[0].Text;
+
+            if (changed)
+                SaveHistory();
         }
         catch (Exception ex)
         {
@@ -171,7 +260,7 @@ public sealed class ClipboardWatcher : IDisposable
                 historyPath,
                 JsonSerializer.Serialize(
                     history,
-                    ClipboardHistoryJsonContext.Default.ListString
+                    ClipboardHistoryJsonContext.Default.ListClipboardHistoryItem
                 )
             );
         }
@@ -185,6 +274,58 @@ public sealed class ClipboardWatcher : IDisposable
     {
         var appSupport = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         return Path.Combine(appSupport, "cbm", "history.json");
+    }
+
+    private static List<ClipboardHistoryItem>? TryDeserializeHistoryItems(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize(
+                json,
+                ClipboardHistoryJsonContext.Default.ListClipboardHistoryItem
+            );
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private int GetPinnedCount()
+    {
+        var count = 0;
+        while (count < history.Count && history[count].IsPinned)
+            count++;
+
+        return count;
+    }
+
+    private static void TrimToLimit(List<ClipboardHistoryItem> items)
+    {
+        if (items.Count <= MAX_ITEMS)
+            return;
+
+        items.RemoveRange(MAX_ITEMS, items.Count - MAX_ITEMS);
+    }
+
+    private void TrimToLimit() => TrimToLimit(history);
+
+    private bool PinAt(int index, ClipboardHistoryItem item)
+    {
+        var pinnedCount = GetPinnedCount();
+        history.RemoveAt(index);
+        history.Insert(pinnedCount, item with { IsPinned = true });
+        SaveHistory();
+        return true;
+    }
+
+    private bool UnpinAt(int index, ClipboardHistoryItem item)
+    {
+        var pinnedCount = GetPinnedCount();
+        history.RemoveAt(index);
+        history.Insert(pinnedCount - 1, item with { IsPinned = false });
+        SaveHistory();
+        return true;
     }
 
     private static string Normalize(string text) =>
