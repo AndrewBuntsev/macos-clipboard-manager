@@ -2,7 +2,7 @@ namespace cbm;
 
 using AppKit;
 using Foundation;
-using CoreGraphics;
+using ObjCRuntime;
 
 /// <summary>
 /// Main application delegate that sets up the clipboard watcher and configures the main window as a sidebar.
@@ -11,6 +11,11 @@ using CoreGraphics;
 public class AppDelegate : NSApplicationDelegate
 {
     private ClipboardWatcher? clipboardWatcher;
+    private WindowPlacementController? windowPlacement;
+    private NSObject? screenChangeObserver;
+    private NSObject? wakeObserver;
+    private NSMenuItem? lockPositionMenuItem;
+    private NSMenuItem? unlockPositionMenuItem;
 
     public ClipboardWatcher Watcher => clipboardWatcher ??= new ClipboardWatcher(0.25);
 
@@ -27,23 +32,6 @@ public class AppDelegate : NSApplicationDelegate
         if (window == null)
             return;
 
-        var screen = window.Screen ?? NSScreen.MainScreen;
-        if (screen == null)
-            return;
-
-        var visible = screen.VisibleFrame;
-        nfloat width = 150;
-
-        // Right edge sidebar
-        var frame = new CGRect(
-            visible.X + visible.Width - width,
-            visible.Y,
-            width,
-            visible.Height
-        );
-
-        window.SetFrame(frame, display: true);
-
         window.TitleVisibility = NSWindowTitleVisibility.Hidden;
         window.TitlebarAppearsTransparent = true;
         window.MovableByWindowBackground = true;
@@ -54,12 +42,141 @@ public class AppDelegate : NSApplicationDelegate
         window.Level = NSWindowLevel.Floating;
         window.CollectionBehavior |= NSWindowCollectionBehavior.CanJoinAllSpaces;
         window.HidesOnDeactivate = false;
+
+        windowPlacement = new WindowPlacementController(window);
+        InstallWindowPlacementMenuItems();
+        windowPlacement.ApplyInitialPlacement();
+
+        screenChangeObserver = NSNotificationCenter.DefaultCenter.AddObserver(
+            NSApplication.DidChangeScreenParametersNotification,
+            _ => ReapplyLockedPlacementSoon()
+        );
+        wakeObserver = NSWorkspace.SharedWorkspace.NotificationCenter.AddObserver(
+            NSWorkspace.DidWakeNotification,
+            _ => ReapplyLockedPlacementSoon()
+        );
+    }
+
+    public override void DidBecomeActive(NSNotification notification)
+    {
+        ReapplyLockedPlacementSoon();
     }
 
     public override void WillTerminate(NSNotification notification)
     {
+        if (screenChangeObserver != null)
+            NSNotificationCenter.DefaultCenter.RemoveObserver(screenChangeObserver);
+        if (wakeObserver != null)
+            NSWorkspace.SharedWorkspace.NotificationCenter.RemoveObserver(wakeObserver);
+
         clipboardWatcher?.Dispose();
         clipboardWatcher = null;
+    }
+
+    [Export("lockCurrentPosition:")]
+    public void LockCurrentPosition(NSObject sender)
+    {
+        windowPlacement?.LockCurrentPosition();
+        UpdatePlacementMenuItems();
+    }
+
+    [Export("unlockPosition:")]
+    public void UnlockPosition(NSObject sender)
+    {
+        windowPlacement?.Unlock();
+        UpdatePlacementMenuItems();
+    }
+
+    [Export("dockLeftOnThisDisplay:")]
+    public void DockLeftOnThisDisplay(NSObject sender)
+    {
+        windowPlacement?.DockLeftOnCurrentDisplay();
+        UpdatePlacementMenuItems();
+    }
+
+    [Export("dockRightOnThisDisplay:")]
+    public void DockRightOnThisDisplay(NSObject sender)
+    {
+        windowPlacement?.DockRightOnCurrentDisplay();
+        UpdatePlacementMenuItems();
+    }
+
+    [Export("validateMenuItem:")]
+    public bool ValidateMenuItem(NSMenuItem menuItem)
+    {
+        UpdatePlacementMenuItems();
+        return menuItem != unlockPositionMenuItem || windowPlacement?.IsLocked == true;
+    }
+
+    private async void ReapplyLockedPlacementSoon()
+    {
+        ReapplyLockedPlacement();
+        await Task.Delay(500);
+        BeginInvokeOnMainThread(ReapplyLockedPlacement);
+    }
+
+    private void ReapplyLockedPlacement()
+    {
+        if (windowPlacement?.IsLocked == true)
+            windowPlacement.ApplyLockedPlacement();
+
+        UpdatePlacementMenuItems();
+    }
+
+    private void InstallWindowPlacementMenuItems()
+    {
+        var windowMenu = NSApplication.SharedApplication.MainMenu?
+            .ItemWithTitle("Window")?
+            .Submenu;
+        if (windowMenu == null ||
+            windowMenu.ItemWithTitle("Lock Current Position") != null)
+        {
+            return;
+        }
+
+        windowMenu.AddItem(NSMenuItem.SeparatorItem);
+
+        lockPositionMenuItem = AddPlacementMenuItem(
+            windowMenu,
+            "Lock Current Position",
+            "lockCurrentPosition:"
+        );
+        unlockPositionMenuItem = AddPlacementMenuItem(
+            windowMenu,
+            "Unlock Position",
+            "unlockPosition:"
+        );
+        AddPlacementMenuItem(
+            windowMenu,
+            "Dock Left on This Display",
+            "dockLeftOnThisDisplay:"
+        );
+        AddPlacementMenuItem(
+            windowMenu,
+            "Dock Right on This Display",
+            "dockRightOnThisDisplay:"
+        );
+
+        UpdatePlacementMenuItems();
+    }
+
+    private NSMenuItem AddPlacementMenuItem(NSMenu menu, string title, string selectorName)
+    {
+        var item = new NSMenuItem(title, new Selector(selectorName), string.Empty)
+        {
+            Target = this
+        };
+        menu.AddItem(item);
+        return item;
+    }
+
+    private void UpdatePlacementMenuItems()
+    {
+        var locked = windowPlacement?.IsLocked == true;
+        if (lockPositionMenuItem != null)
+            lockPositionMenuItem.State = locked ? NSCellStateValue.On : NSCellStateValue.Off;
+        if (unlockPositionMenuItem != null)
+            unlockPositionMenuItem.Enabled = locked;
     }
 
     private static string DescribeClipboardItem(ClipboardHistoryItem item)
