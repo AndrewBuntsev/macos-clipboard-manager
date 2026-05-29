@@ -28,13 +28,13 @@ public sealed class HoverTableCellView : NSTableCellView
             Title = "❌",
             Bordered = false,
             Font = NSFont.BoldSystemFontOfSize(13),
-            Hidden = true
+            Hidden = true,
+            BezelColor = NSColor.SystemRed,
+            AttributedTitle = new NSAttributedString(
+                "❌",
+                new NSStringAttributes { ForegroundColor = NSColor.White }
+            )
         };
-        CloseButton.BezelColor = NSColor.SystemRed;
-        CloseButton.AttributedTitle = new NSAttributedString(
-            "❌",
-            new NSStringAttributes { ForegroundColor = NSColor.White }
-        );
         CloseButton.SetButtonType(NSButtonType.MomentaryChange);
         CloseButton.TranslatesAutoresizingMaskIntoConstraints = false;
 
@@ -43,7 +43,7 @@ public sealed class HoverTableCellView : NSTableCellView
 
         NSLayoutConstraint.ActivateConstraints(new[]
         {
-            CloseButton.TrailingAnchor.ConstraintEqualTo(TrailingAnchor, -2),
+            CloseButton.TrailingAnchor.ConstraintEqualTo(TrailingAnchor, 8),
             CloseButton.TopAnchor.ConstraintEqualTo(TopAnchor, 2),
             CloseButton.WidthAnchor.ConstraintEqualTo(18),
             CloseButton.HeightAnchor.ConstraintEqualTo(18),
