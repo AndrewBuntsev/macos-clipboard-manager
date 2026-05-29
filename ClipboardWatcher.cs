@@ -60,7 +60,7 @@ public sealed class ClipboardWatcher : IDisposable
 
         AddToHistory(item);
 
-        Console.WriteLine($"[cbm] clipboard: {TrimForLog(item)}");
+        Console.WriteLine($"[cbm] clipboard: {DescribeForLog(item)}");
 
         OnNewItem?.Invoke(item);
     }
@@ -509,18 +509,38 @@ public sealed class ClipboardWatcher : IDisposable
     private static string HashBytes(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
-    private static string TrimForLog(ClipboardHistoryItem item)
+    private static string DescribeForLog(ClipboardHistoryItem item)
     {
-        var s = item.Kind switch
+        return item.Kind switch
         {
-            ClipboardHistoryItemKind.Image => $"Image {item.ContentHash}",
-            ClipboardHistoryItemKind.FileList => $"Files {string.Join(", ", GetFilePaths(item))}",
-            _ => item.Text
+            ClipboardHistoryItemKind.Image => $"Image ({DescribeImageSize(item)})",
+            ClipboardHistoryItemKind.FileList => DescribeFiles(item),
+            _ => DescribeText(item)
         };
-
-        s = s.Replace("\r", " ").Replace("\n", " ");
-        return s.Length <= 250 ? s : s[..250] + "…";
     }
+
+    private static string DescribeText(ClipboardHistoryItem item)
+    {
+        var charCount = item.Text.Length;
+        return $"Text ({charCount} {Pluralize(charCount, "char")})";
+    }
+
+    private static string DescribeFiles(ClipboardHistoryItem item)
+    {
+        var fileCount = GetFilePaths(item).Count;
+        return $"Files ({fileCount} {Pluralize(fileCount, "item")})";
+    }
+
+    private static string DescribeImageSize(ClipboardHistoryItem item)
+    {
+        if (item.ImageWidth is not { } width || item.ImageHeight is not { } height)
+            return "stored";
+
+        return $"{Math.Round(width)}x{Math.Round(height)}";
+    }
+
+    private static string Pluralize(int count, string singular) =>
+        count == 1 ? singular : singular + "s";
 
     private static List<string> GetFilePaths(ClipboardHistoryItem item)
     {
