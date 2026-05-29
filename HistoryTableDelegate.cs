@@ -38,15 +38,20 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         if (row < 0 || row >= clipboardWatcher.History.Count)
             return HeightForLines(MIN_VISIBLE_LINES);
 
-        var text = TrimForDisplay(clipboardWatcher.History[(int)row].Text);
+        var item = clipboardWatcher.History[(int)row];
+        var text = TrimForDisplay(FormatItemForDisplay(item));
         var wrappedLines = MeasureWrappedLineCount(text, tableView);
+        if (item.Kind == ClipboardHistoryItemKind.Image)
+            wrappedLines = Math.Max(wrappedLines, 3);
+
         return HeightForLines(Math.Clamp(wrappedLines, MIN_VISIBLE_LINES, MAX_VISIBLE_LINES));
     }
 
     public override NSView GetViewForItem(NSTableView tableView, NSTableColumn tableColumn, nint row)
     {
         var item = clipboardWatcher.History[(int)row];
-        var text = item.Text;
+        var text = FormatItemForDisplay(item);
+        var toolTip = FormatItemToolTip(item);
 
         var cell = tableView.MakeView(CELL_ID, this) as HoverTableCellView;
         if (cell == null)
@@ -72,9 +77,10 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
             cell.TextField = textField;
 
             // Simple padding + full width/height constraints
+            cell.TextLeadingConstraint = textField.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 0);
             NSLayoutConstraint.ActivateConstraints(new[]
             {
-                textField.LeadingAnchor.ConstraintEqualTo(cell.LeadingAnchor, 0),
+                cell.TextLeadingConstraint,
                 textField.TrailingAnchor.ConstraintEqualTo(cell.TrailingAnchor, 0),
                 textField.TopAnchor.ConstraintEqualTo(cell.TopAnchor, 6),
                 textField.BottomAnchor.ConstraintEqualTo(cell.BottomAnchor, -6),
@@ -88,10 +94,11 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         cell.CloseButton.Tag = row;
         cell.PinButton.Tag = row;
         ConfigurePinButton(cell, item.IsPinned);
+        cell.SetPreviewImage(LoadPreviewImage(item));
         cell.ResetHoverState();
         cell.TextField!.StringValue = TrimForDisplay(text);
-        cell.ToolTip = text;
-        cell.TextField.ToolTip = text;
+        cell.ToolTip = toolTip;
+        cell.TextField.ToolTip = toolTip;
         return cell;
     }
 
@@ -107,16 +114,16 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         if (row < 0 || row >= clipboardWatcher.History.Count)
             return;
 
-        var selectedText = clipboardWatcher.History[row].Text;
+        var selectedItem = clipboardWatcher.History[row];
 
         // Copy back + move to top without re-triggering selection events
         suppressSelection = true;
         try
         {
-            clipboardWatcher.Activate(selectedText);
+            clipboardWatcher.Activate(selectedItem);
             table.ReloadData();
 
-            var selectedRow = clipboardWatcher.IndexOf(selectedText);
+            var selectedRow = clipboardWatcher.IndexOf(selectedItem);
             if (selectedRow < 0)
                 selectedRow = 0;
 
@@ -151,17 +158,17 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         if (row < 0 || row >= clipboardWatcher.History.Count)
             return;
 
-        var text = clipboardWatcher.History[row].Text;
+        var item = clipboardWatcher.History[row];
         if (button.Superview is NSView tileView)
         {
-            FadeOutAndDelete(tileView, text);
+            FadeOutAndDelete(tileView, item);
             return;
         }
 
-        DeleteItem(text);
+        DeleteItem(item);
     }
 
-    private void FadeOutAndDelete(NSView tileView, string text)
+    private void FadeOutAndDelete(NSView tileView, ClipboardHistoryItem item)
     {
         const int steps = 6;
         var step = 0;
@@ -182,16 +189,16 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
 
                 // Reset in case AppKit reuses this cell view instance.
                 tileView.AlphaValue = 1;
-                DeleteItem(text);
+                DeleteItem(item);
             }
         );
     }
 
-    private void DeleteItem(string text)
+    private void DeleteItem(ClipboardHistoryItem item)
     {
         PerformSelectionSilently(() =>
         {
-            var row = clipboardWatcher.IndexOf(text);
+            var row = clipboardWatcher.IndexOf(item);
             if (row < 0)
                 return;
 
@@ -212,7 +219,7 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         if (row < 0 || row >= clipboardWatcher.History.Count)
             return;
 
-        var text = clipboardWatcher.History[row].Text;
+        var item = clipboardWatcher.History[row];
 
         PerformSelectionSilently(() =>
         {
@@ -221,7 +228,7 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
 
             table.ReloadData();
 
-            var newRow = clipboardWatcher.IndexOf(text);
+            var newRow = clipboardWatcher.IndexOf(item);
             if (newRow >= 0)
             {
                 table.SelectRow(newRow, byExtendingSelection: false);
@@ -235,6 +242,56 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         cell.PinButton.Title = isPinned ? "📌" : "📍";
         cell.PinButton.ToolTip = isPinned ? "Unpin" : "Pin";
         cell.SetPinAlwaysVisible(isPinned);
+    }
+
+    private static string FormatItemForDisplay(ClipboardHistoryItem item) =>
+        item.Kind switch
+        {
+            ClipboardHistoryItemKind.Image => string.Empty,
+            ClipboardHistoryItemKind.FileList => FormatFileListForDisplay(item),
+            _ => item.Text
+        };
+
+    private static string FormatItemToolTip(ClipboardHistoryItem item) =>
+        item.Kind == ClipboardHistoryItemKind.FileList
+            ? string.Join(Environment.NewLine, GetFilePaths(item))
+            : item.Text;
+
+    private static string FormatFileListForDisplay(ClipboardHistoryItem item)
+    {
+        var paths = GetFilePaths(item);
+        if (paths.Count == 0)
+            return "📄 File";
+
+        if (paths.Count == 1)
+            return $"{GetFileIcon(paths[0])} {paths[0]}";
+
+        var icon = paths.All(Directory.Exists) ? "📁" : "📄";
+        return $"{icon} {paths.Count} items{Environment.NewLine}{string.Join(Environment.NewLine, paths)}";
+    }
+
+    private static string GetFileIcon(string path) =>
+        Directory.Exists(path) ? "📁" : "📄";
+
+    private NSImage? LoadPreviewImage(ClipboardHistoryItem item)
+    {
+        if (item.Kind != ClipboardHistoryItemKind.Image)
+            return null;
+
+        var payloadPath = clipboardWatcher.GetPayloadPath(item);
+        return payloadPath != null && File.Exists(payloadPath)
+            ? new NSImage(payloadPath)
+            : null;
+    }
+
+    private static List<string> GetFilePaths(ClipboardHistoryItem item)
+    {
+        if (item.FilePaths != null)
+            return item.FilePaths;
+
+        return item.Text
+            .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
     }
 
     private static int MeasureWrappedLineCount(string text, NSTableView tableView)

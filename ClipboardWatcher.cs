@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace cbm;
@@ -9,25 +10,32 @@ public sealed class ClipboardWatcher : IDisposable
 {
     private const int MAX_CHARS = 50_000;
     private const int MAX_ITEMS = 100;
+    private const long MAX_IMAGE_STORAGE_BYTES = 256L * 1024 * 1024;
+    private const string PASTEBOARD_TYPE_STRING = "public.utf8-plain-text";
+    private const string PASTEBOARD_TYPE_FILE_URL = "public.file-url";
+    private const string PASTEBOARD_TYPE_PNG = "public.png";
+    private const string PASTEBOARD_TYPE_TIFF = "public.tiff";
 
     private readonly NSPasteboard pasteboard = NSPasteboard.GeneralPasteboard;
     private readonly NSTimer timer;
+    private readonly string appSupportDirectory;
+    private readonly string imagesDirectory;
     private readonly string historyPath;
     private int lastChangeCount;
-    private string? lastText;
+    private string? lastItemKey;
     private readonly List<ClipboardHistoryItem> history = new();
 
     // Pinned items are always first and preserve pin order.
     public IReadOnlyList<ClipboardHistoryItem> History => history;
-    // Event raised when new text is copied to the clipboard
-    public event Action<string>? OnNewText;
-
+    public event Action<ClipboardHistoryItem>? OnNewItem;
 
     public ClipboardWatcher(double pollSeconds = 0.25)
     {
         Log.Info("[cbm] ClipboardWatcher started");
         lastChangeCount = (int)pasteboard.ChangeCount;
-        historyPath = BuildHistoryPath();
+        appSupportDirectory = BuildAppSupportPath();
+        imagesDirectory = Path.Combine(appSupportDirectory, "images");
+        historyPath = Path.Combine(appSupportDirectory, "history.json");
         LoadHistory();
 
         // Run on main runloop (safe for AppKit usage)
@@ -43,28 +51,103 @@ public sealed class ClipboardWatcher : IDisposable
         if (changeCount == lastChangeCount) return;
         lastChangeCount = (int)changeCount;
 
-        // Text only for now. (Later: images, files, RTF/HTML)
-        var text = pasteboard.GetStringForType(NSPasteboard.NSPasteboardTypeString);
+        var item = TryReadCurrentItem();
+        if (item == null) return;
 
-        if (string.IsNullOrEmpty(text)) return;
+        var itemKey = GetItemKey(item);
+        if (itemKey == lastItemKey) return;
+        lastItemKey = itemKey;
 
-        // Dedupe repeated updates that keep same text
-        if (text == lastText) return;
-        lastText = text;
+        AddToHistory(item);
 
-        AddToHistory(text);
+        Console.WriteLine($"[cbm] clipboard: {TrimForLog(item)}");
 
-        // Log for now (so you can see it working immediately)
-        Console.WriteLine($"[cbm] clipboard: {TrimForLog(text)}");
-
-        OnNewText?.Invoke(text);
+        OnNewItem?.Invoke(item);
     }
 
-    private void AddToHistory(string text)
-    {
-        text = Normalize(text);
+    private ClipboardHistoryItem? TryReadCurrentItem() =>
+        TryReadFileListItem() ??
+        TryReadImageItem() ??
+        TryReadTextItem();
 
-        var existingIndex = IndexOf(text);
+    private ClipboardHistoryItem? TryReadTextItem()
+    {
+        var text = pasteboard.GetStringForType(PASTEBOARD_TYPE_STRING);
+        if (string.IsNullOrEmpty(text))
+            return null;
+
+        return ClipboardHistoryItem.TextItem(Normalize(text));
+    }
+
+    private ClipboardHistoryItem? TryReadFileListItem()
+    {
+        var pasteboardItems = pasteboard.PasteboardItems;
+        if (pasteboardItems == null || pasteboardItems.Length == 0)
+            return null;
+
+        var paths = new List<string>();
+        foreach (var pasteboardItem in pasteboardItems)
+        {
+            var fileUrl = pasteboardItem.GetStringForType(PASTEBOARD_TYPE_FILE_URL);
+            if (string.IsNullOrEmpty(fileUrl))
+                continue;
+
+            var url = NSUrl.FromString(fileUrl);
+            var path = url?.IsFileUrl == true ? url.Path : null;
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            if (!paths.Contains(path, StringComparer.Ordinal))
+                paths.Add(path);
+        }
+
+        return paths.Count == 0 ? null : ClipboardHistoryItem.FileListItem(paths);
+    }
+
+    private ClipboardHistoryItem? TryReadImageItem()
+    {
+        var pngData = pasteboard.GetDataForType(PASTEBOARD_TYPE_PNG);
+        NSImage? image = null;
+
+        if (pngData != null)
+        {
+            image = new NSImage(pngData);
+        }
+        else
+        {
+            var tiffData = pasteboard.GetDataForType(PASTEBOARD_TYPE_TIFF);
+            if (tiffData == null)
+                return null;
+
+            image = new NSImage(tiffData);
+            pngData = ConvertImageToPng(image);
+        }
+
+        if (pngData == null || image == null)
+            return null;
+
+        var bytes = pngData.ToArray();
+        if (bytes.Length == 0)
+            return null;
+
+        var hash = HashBytes(bytes);
+        var relativePath = Path.Combine("images", $"{hash}.png");
+        var absolutePath = Path.Combine(appSupportDirectory, relativePath);
+
+        Directory.CreateDirectory(imagesDirectory);
+        if (!File.Exists(absolutePath))
+            File.WriteAllBytes(absolutePath, bytes);
+
+        var size = image.Size;
+        var displayText = $"Image {Math.Round((double)size.Width)}x{Math.Round((double)size.Height)}";
+        return ClipboardHistoryItem.ImageItem(displayText, hash, relativePath, size);
+    }
+
+    private void AddToHistory(ClipboardHistoryItem item)
+    {
+        item = Normalize(item);
+
+        var existingIndex = IndexOf(item);
         if (existingIndex >= 0)
         {
             if (history[existingIndex].IsPinned)
@@ -81,22 +164,22 @@ public sealed class ClipboardWatcher : IDisposable
             return;
         }
 
-        history.Insert(GetPinnedCount(), new ClipboardHistoryItem(text, IsPinned: false));
+        history.Insert(GetPinnedCount(), item with { IsPinned = false });
         TrimToLimit();
+        EnforceImageStorageLimit();
 
         SaveHistory();
     }
 
-    public void Activate(string text)
+    public void Activate(ClipboardHistoryItem item)
     {
-        text = Normalize(text);
+        item = Normalize(item);
 
-        // Write back to clipboard
-        pasteboard.ClearContents();
-        pasteboard.SetStringForType(text, NSPasteboard.NSPasteboardTypeString);
+        if (!WriteItemToPasteboard(item))
+            return;
 
         var changed = false;
-        var existingIndex = IndexOf(text);
+        var existingIndex = IndexOf(item);
         if (existingIndex >= 0)
         {
             var selected = history[existingIndex];
@@ -113,16 +196,16 @@ public sealed class ClipboardWatcher : IDisposable
         }
         else
         {
-            history.Insert(GetPinnedCount(), new ClipboardHistoryItem(text, IsPinned: false));
+            history.Insert(GetPinnedCount(), item with { IsPinned = false });
             TrimToLimit();
             changed = true;
         }
 
-        lastText = text;
+        lastItemKey = GetItemKey(item);
         if (changed)
             SaveHistory();
 
-        Log.Info($"activated clipboard item");
+        Log.Info("activated clipboard item");
     }
 
     public bool RemoveAt(int index)
@@ -130,12 +213,13 @@ public sealed class ClipboardWatcher : IDisposable
         if (index < 0 || index >= history.Count)
             return false;
 
-        var removed = history[index].Text;
+        var removed = history[index];
         history.RemoveAt(index);
+        DeletePayloadIfUnused(removed);
         SaveHistory();
 
-        if (lastText == removed)
-            lastText = null;
+        if (lastItemKey == GetItemKey(removed))
+            lastItemKey = null;
 
         return true;
     }
@@ -152,28 +236,100 @@ public sealed class ClipboardWatcher : IDisposable
         return PinAt(index, item);
     }
 
-    public int IndexOf(string text)
+    public string? GetPayloadPath(ClipboardHistoryItem item) =>
+        string.IsNullOrEmpty(item.PayloadPath) ? null : ResolvePayloadPath(item.PayloadPath);
+
+    public int IndexOf(ClipboardHistoryItem item)
     {
-        text = Normalize(text);
+        var key = GetItemKey(Normalize(item));
         for (var i = 0; i < history.Count; i++)
         {
-            if (history[i].Text == text)
+            if (GetItemKey(history[i]) == key)
                 return i;
         }
 
         return -1;
     }
 
-    private static string TrimForLog(string s)
-    {
-        s = s.Replace("\r", " ").Replace("\n", " ");
-        return s.Length <= 250 ? s : s[..250] + "…";
-    }
-
     public void Dispose()
     {
         timer.Invalidate();
         timer.Dispose();
+    }
+
+    private bool WriteItemToPasteboard(ClipboardHistoryItem item)
+    {
+        switch (item.Kind)
+        {
+            case ClipboardHistoryItemKind.Text:
+                pasteboard.ClearContents();
+                pasteboard.SetStringForType(item.Text, PASTEBOARD_TYPE_STRING);
+                return true;
+
+            case ClipboardHistoryItemKind.Image:
+                return WriteImageToPasteboard(item);
+
+            case ClipboardHistoryItemKind.FileList:
+                return WriteFilesToPasteboard(GetFilePaths(item));
+
+            default:
+                return false;
+        }
+    }
+
+    private bool WriteImageToPasteboard(ClipboardHistoryItem item)
+    {
+        if (string.IsNullOrEmpty(item.PayloadPath))
+            return false;
+
+        var absolutePath = ResolvePayloadPath(item.PayloadPath);
+        if (absolutePath == null || !File.Exists(absolutePath))
+            return false;
+
+        var pngData = NSData.FromFile(absolutePath);
+        if (pngData == null)
+            return false;
+
+        pasteboard.ClearContents();
+        pasteboard.SetDataForType(pngData, PASTEBOARD_TYPE_PNG);
+
+        using var image = new NSImage(pngData);
+        var tiffData = image.AsTiff();
+        if (tiffData != null)
+            pasteboard.SetDataForType(tiffData, PASTEBOARD_TYPE_TIFF);
+
+        return true;
+    }
+
+    private bool WriteFilesToPasteboard(List<string> filePaths)
+    {
+        if (filePaths.Count == 0)
+            return false;
+
+        var pasteboardItems = new List<INSPasteboardWriting>();
+        foreach (var filePath in filePaths)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+                continue;
+
+            var fileUrl = NSUrl.FromFilename(filePath);
+            if (string.IsNullOrEmpty(fileUrl.AbsoluteString))
+                continue;
+
+            var pasteboardItem = new NSPasteboardItem();
+            pasteboardItem.SetStringForType(
+                fileUrl.AbsoluteString,
+                PASTEBOARD_TYPE_FILE_URL
+            );
+            pasteboardItems.Add(pasteboardItem);
+        }
+
+        if (pasteboardItems.Count == 0)
+            return false;
+
+        pasteboard.ClearContents();
+        pasteboard.WriteObjects(pasteboardItems.ToArray());
+        return true;
     }
 
     private void LoadHistory()
@@ -197,7 +353,7 @@ public sealed class ClipboardWatcher : IDisposable
                     loaded = new List<ClipboardHistoryItem>(legacy.Count);
                     foreach (var item in legacy)
                     {
-                        loaded.Add(new ClipboardHistoryItem(item, IsPinned: false));
+                        loaded.Add(new ClipboardHistoryItem(item, isPinned: false));
                     }
 
                     loadedFromLegacy = true;
@@ -212,34 +368,31 @@ public sealed class ClipboardWatcher : IDisposable
 
             foreach (var item in loaded)
             {
-                if (string.IsNullOrWhiteSpace(item.Text))
+                var normalized = NormalizeLoadedItem(item, ref changed);
+                if (normalized == null)
                     continue;
 
-                var normalized = Normalize(item.Text);
                 if (IndexOf(normalized) >= 0)
                 {
                     changed = true;
                     continue;
                 }
 
-                var isPinned = item.IsPinned && !pinnedSectionClosed;
-                if (!item.IsPinned && !pinnedSectionClosed)
+                var isPinned = normalized.IsPinned && !pinnedSectionClosed;
+                if (!normalized.IsPinned && !pinnedSectionClosed)
                     pinnedSectionClosed = true;
-                if (item.IsPinned && pinnedSectionClosed)
+                if (normalized.IsPinned && pinnedSectionClosed)
                     changed = true;
 
-                if (normalized != item.Text)
-                    changed = true;
-
-                history.Add(new ClipboardHistoryItem(normalized, isPinned));
+                history.Add(normalized with { IsPinned = isPinned });
                 if (history.Count >= MAX_ITEMS)
                     break;
             }
 
             if (history.Count > 0)
-                lastText = history[0].Text;
+                lastItemKey = GetItemKey(history[0]);
 
-            if (changed)
+            if (changed || EnforceImageStorageLimit())
                 SaveHistory();
         }
         catch (Exception ex)
@@ -252,9 +405,7 @@ public sealed class ClipboardWatcher : IDisposable
     {
         try
         {
-            var directory = Path.GetDirectoryName(historyPath);
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
+            Directory.CreateDirectory(appSupportDirectory);
 
             File.WriteAllText(
                 historyPath,
@@ -270,10 +421,10 @@ public sealed class ClipboardWatcher : IDisposable
         }
     }
 
-    private static string BuildHistoryPath()
+    private static string BuildAppSupportPath()
     {
         var appSupport = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        return Path.Combine(appSupport, "cbm", "history.json");
+        return Path.Combine(appSupport, "cbm");
     }
 
     private static List<ClipboardHistoryItem>? TryDeserializeHistoryItems(string json)
@@ -291,6 +442,96 @@ public sealed class ClipboardWatcher : IDisposable
         }
     }
 
+    private ClipboardHistoryItem? NormalizeLoadedItem(
+        ClipboardHistoryItem item,
+        ref bool changed
+    )
+    {
+        var normalized = Normalize(item);
+        if (string.IsNullOrWhiteSpace(normalized.Text))
+            return null;
+
+        if (normalized.Kind == ClipboardHistoryItemKind.Image)
+        {
+            if (string.IsNullOrEmpty(normalized.PayloadPath))
+                return null;
+
+            var payloadPath = ResolvePayloadPath(normalized.PayloadPath);
+            if (payloadPath == null || !File.Exists(payloadPath))
+            {
+                changed = true;
+                return null;
+            }
+        }
+
+        if (normalized.Kind == ClipboardHistoryItemKind.FileList &&
+            (normalized.FilePaths == null || normalized.FilePaths.Count == 0))
+        {
+            changed = true;
+            return null;
+        }
+
+        if (normalized != item)
+            changed = true;
+
+        return normalized;
+    }
+
+    private ClipboardHistoryItem Normalize(ClipboardHistoryItem item)
+    {
+        var text = Normalize(item.Text ?? string.Empty);
+
+        if (item.Kind != ClipboardHistoryItemKind.FileList)
+            return item with { Text = text };
+
+        var filePaths = GetFilePaths(item)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        return item with
+        {
+            Text = Normalize(string.Join(Environment.NewLine, filePaths)),
+            FilePaths = filePaths
+        };
+    }
+
+    private static NSData? ConvertImageToPng(NSImage image)
+    {
+        var tiffData = image.AsTiff();
+        if (tiffData == null)
+            return null;
+
+        var imageRep = NSBitmapImageRep.ImageRepFromData(tiffData) as NSBitmapImageRep;
+        return imageRep?.RepresentationUsingTypeProperties(NSBitmapImageFileType.Png);
+    }
+
+    private static string HashBytes(byte[] bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private static string TrimForLog(ClipboardHistoryItem item)
+    {
+        var s = item.Kind switch
+        {
+            ClipboardHistoryItemKind.Image => $"Image {item.ContentHash}",
+            ClipboardHistoryItemKind.FileList => $"Files {string.Join(", ", GetFilePaths(item))}",
+            _ => item.Text
+        };
+
+        s = s.Replace("\r", " ").Replace("\n", " ");
+        return s.Length <= 250 ? s : s[..250] + "…";
+    }
+
+    private static List<string> GetFilePaths(ClipboardHistoryItem item)
+    {
+        if (item.FilePaths != null)
+            return item.FilePaths;
+
+        return item.Text
+            .Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+    }
+
     private int GetPinnedCount()
     {
         var count = 0;
@@ -300,15 +541,90 @@ public sealed class ClipboardWatcher : IDisposable
         return count;
     }
 
-    private static void TrimToLimit(List<ClipboardHistoryItem> items)
+    private void TrimToLimit()
     {
-        if (items.Count <= MAX_ITEMS)
+        if (history.Count <= MAX_ITEMS)
             return;
 
-        items.RemoveRange(MAX_ITEMS, items.Count - MAX_ITEMS);
+        var removed = history.GetRange(MAX_ITEMS, history.Count - MAX_ITEMS);
+        history.RemoveRange(MAX_ITEMS, history.Count - MAX_ITEMS);
+        foreach (var item in removed)
+            DeletePayloadIfUnused(item);
     }
 
-    private void TrimToLimit() => TrimToLimit(history);
+    private bool EnforceImageStorageLimit()
+    {
+        var imageItems = history
+            .Where(item => item.Kind == ClipboardHistoryItemKind.Image)
+            .Where(item => !string.IsNullOrEmpty(item.PayloadPath))
+            .ToList();
+
+        var totalBytes = imageItems
+            .Select(item => ResolvePayloadPath(item.PayloadPath!))
+            .Where(path => path != null && File.Exists(path))
+            .Distinct(StringComparer.Ordinal)
+            .Sum(path => new FileInfo(path!).Length);
+
+        if (totalBytes <= MAX_IMAGE_STORAGE_BYTES)
+            return false;
+
+        var changed = false;
+        for (var i = history.Count - 1; i >= 0 && totalBytes > MAX_IMAGE_STORAGE_BYTES; i--)
+        {
+            var item = history[i];
+            if (item.Kind != ClipboardHistoryItemKind.Image || item.IsPinned)
+                continue;
+
+            var payloadPath = string.IsNullOrEmpty(item.PayloadPath)
+                ? null
+                : ResolvePayloadPath(item.PayloadPath);
+            var payloadSize = payloadPath != null && File.Exists(payloadPath)
+                ? new FileInfo(payloadPath).Length
+                : 0;
+
+            history.RemoveAt(i);
+            DeletePayloadIfUnused(item);
+            totalBytes -= payloadSize;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private void DeletePayloadIfUnused(ClipboardHistoryItem item)
+    {
+        if (item.Kind != ClipboardHistoryItemKind.Image ||
+            string.IsNullOrEmpty(item.PayloadPath) ||
+            history.Any(existing => existing.PayloadPath == item.PayloadPath))
+            return;
+
+        var payloadPath = ResolvePayloadPath(item.PayloadPath);
+        if (payloadPath == null || !File.Exists(payloadPath))
+            return;
+
+        try
+        {
+            File.Delete(payloadPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Info($"failed to delete clipboard payload: {ex.Message}");
+        }
+    }
+
+    private string? ResolvePayloadPath(string relativePath)
+    {
+        var root = Path.GetFullPath(appSupportDirectory);
+        var candidate = Path.GetFullPath(Path.Combine(appSupportDirectory, relativePath));
+        var rootWithSeparator = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+
+        return candidate.Equals(root, StringComparison.Ordinal) ||
+               candidate.StartsWith(rootWithSeparator, StringComparison.Ordinal)
+            ? candidate
+            : null;
+    }
 
     private bool PinAt(int index, ClipboardHistoryItem item)
     {
@@ -327,6 +643,14 @@ public sealed class ClipboardWatcher : IDisposable
         SaveHistory();
         return true;
     }
+
+    private static string GetItemKey(ClipboardHistoryItem item) =>
+        item.Kind switch
+        {
+            ClipboardHistoryItemKind.Image => $"image:{item.ContentHash ?? item.PayloadPath ?? item.Text}",
+            ClipboardHistoryItemKind.FileList => $"files:{string.Join('\n', GetFilePaths(item))}",
+            _ => $"text:{item.Text}"
+        };
 
     private static string Normalize(string text) =>
         text.Length <= MAX_CHARS ? text : text[..MAX_CHARS];

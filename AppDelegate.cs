@@ -17,9 +17,9 @@ public class AppDelegate : NSApplicationDelegate {
 	{
 		Log.Info("AppDelegate DidFinishLaunching");
 
-		Watcher.OnNewText += text =>
+		Watcher.OnNewItem += item =>
 		{
-			Log.Info($"Copied text: {text}");
+			Log.Info($"Copied {item.Kind}: {item.Text}");
 		};
 
 		var window = NSApplication.SharedApplication.MainWindow;

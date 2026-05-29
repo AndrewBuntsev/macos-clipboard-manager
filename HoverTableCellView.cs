@@ -10,9 +10,18 @@ public sealed class HoverTableCellView : NSTableCellView
 
     public NSButton CloseButton { get; }
     public NSButton PinButton { get; }
+    public NSImageView PreviewImageView { get; }
+    public NSLayoutConstraint? TextLeadingConstraint { get; set; }
 
     public HoverTableCellView()
     {
+        PreviewImageView = new NSImageView
+        {
+            Hidden = true,
+            ImageScaling = NSImageScale.ProportionallyUpOrDown,
+            TranslatesAutoresizingMaskIntoConstraints = false
+        };
+
         PinButton = new NSButton
         {
             Title = "📍",
@@ -38,11 +47,16 @@ public sealed class HoverTableCellView : NSTableCellView
         CloseButton.SetButtonType(NSButtonType.MomentaryChange);
         CloseButton.TranslatesAutoresizingMaskIntoConstraints = false;
 
+        AddSubview(PreviewImageView);
         AddSubview(PinButton);
         AddSubview(CloseButton);
 
         NSLayoutConstraint.ActivateConstraints(new[]
         {
+            PreviewImageView.LeadingAnchor.ConstraintEqualTo(LeadingAnchor, 4),
+            PreviewImageView.TopAnchor.ConstraintEqualTo(TopAnchor, 8),
+            PreviewImageView.WidthAnchor.ConstraintEqualTo(36),
+            PreviewImageView.HeightAnchor.ConstraintEqualTo(36),
             CloseButton.TrailingAnchor.ConstraintEqualTo(TrailingAnchor, 8),
             CloseButton.TopAnchor.ConstraintEqualTo(TopAnchor, 2),
             CloseButton.WidthAnchor.ConstraintEqualTo(18),
@@ -99,5 +113,14 @@ public sealed class HoverTableCellView : NSTableCellView
     {
         CloseButton.Hidden = true;
         PinButton.Hidden = !pinAlwaysVisible;
+    }
+
+    public void SetPreviewImage(NSImage? image)
+    {
+        PreviewImageView.Image = image;
+        PreviewImageView.Hidden = image == null;
+
+        if (TextLeadingConstraint != null)
+            TextLeadingConstraint.Constant = image == null ? 0 : 44;
     }
 }

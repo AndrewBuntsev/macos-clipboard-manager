@@ -80,7 +80,7 @@ public partial class ViewController : NSViewController {
         scroll.DocumentView = table;
 
         // Refresh UI when clipboard changes
-        watcher.OnNewText += (text) =>
+        watcher.OnNewItem += (item) =>
         {
             // Must update UI on main thread
             BeginInvokeOnMainThread(() =>
@@ -92,7 +92,7 @@ public partial class ViewController : NSViewController {
                 {
                     table.ReloadData();
 
-                    var row = watcher.IndexOf(text);
+                    var row = watcher.IndexOf(item);
                     if (row >= 0)
                     {
                         table.SelectRow(row, byExtendingSelection: false);
