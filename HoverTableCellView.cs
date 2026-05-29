@@ -17,7 +17,7 @@ public sealed class HoverTableCellView : NSTableCellView
         {
             Title = "📍",
             Bordered = false,
-            Font = NSFont.BoldSystemFontOfSize(13),
+            Font = NSFont.BoldSystemFontOfSize(13)!,
             Hidden = true
         };
         PinButton.SetButtonType(NSButtonType.MomentaryChange);
@@ -27,7 +27,7 @@ public sealed class HoverTableCellView : NSTableCellView
         {
             Title = "❌",
             Bordered = false,
-            Font = NSFont.BoldSystemFontOfSize(13),
+            Font = NSFont.BoldSystemFontOfSize(13)!,
             Hidden = true,
             BezelColor = NSColor.SystemRed,
             AttributedTitle = new NSAttributedString(
@@ -92,6 +92,12 @@ public sealed class HoverTableCellView : NSTableCellView
     public void SetPinAlwaysVisible(bool alwaysVisible)
     {
         pinAlwaysVisible = alwaysVisible;
+        ResetHoverState();
+    }
+
+    public void ResetHoverState()
+    {
+        CloseButton.Hidden = true;
         PinButton.Hidden = !pinAlwaysVisible;
     }
 }

@@ -87,8 +87,8 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
 
         cell.CloseButton.Tag = row;
         cell.PinButton.Tag = row;
-        cell.CloseButton.Hidden = true;
         ConfigurePinButton(cell, item.IsPinned);
+        cell.ResetHoverState();
         cell.TextField!.StringValue = TrimForDisplay(text);
         cell.ToolTip = text;
         cell.TextField.ToolTip = text;
