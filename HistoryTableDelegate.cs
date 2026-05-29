@@ -7,6 +7,21 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
 {
     private const string CELL_ID = "HistoryCell";
     private const double DELETE_ANIMATION_SECONDS = 0.25;
+    private const int MIN_VISIBLE_LINES = 1;
+    private const int MAX_VISIBLE_LINES = 4;
+    private const double ROW_VERTICAL_PADDING = 12;
+    private const double ROW_SLOT_LINE_HEIGHT = 16;
+    private const double MIN_TEXT_WIDTH = 40;
+
+    private static readonly NSFont RowTextFont = NSFont.SystemFontOfSize(11)!;
+    private static readonly double MeasurementLineHeight = Math.Max(
+        1,
+        (double)(RowTextFont.Ascender - RowTextFont.Descender + RowTextFont.Leading)
+    );
+    private static readonly NSStringAttributes RowTextAttributes = new()
+    {
+        Font = RowTextFont
+    };
 
     private readonly ClipboardWatcher clipboardWatcher;
     private readonly NSTableView table;
@@ -16,6 +31,16 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
     {
         this.clipboardWatcher = clipboardWatcher;
         this.table = table;
+    }
+
+    public override nfloat GetRowHeight(NSTableView tableView, nint row)
+    {
+        if (row < 0 || row >= clipboardWatcher.History.Count)
+            return HeightForLines(MIN_VISIBLE_LINES);
+
+        var text = TrimForDisplay(clipboardWatcher.History[(int)row].Text);
+        var wrappedLines = MeasureWrappedLineCount(text, tableView);
+        return HeightForLines(Math.Clamp(wrappedLines, MIN_VISIBLE_LINES, MAX_VISIBLE_LINES));
     }
 
     public override NSView GetViewForItem(NSTableView tableView, NSTableColumn tableColumn, nint row)
@@ -36,7 +61,7 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
                 Bordered = false,
                 DrawsBackground = false,
                 LineBreakMode = NSLineBreakMode.ByWordWrapping,
-                Font = NSFont.SystemFontOfSize(11)
+                Font = RowTextFont
             };
             textField.Cell.Wraps = true;
             textField.Cell.Scrollable = false;
@@ -211,6 +236,24 @@ public sealed class HistoryTableDelegate : NSTableViewDelegate
         cell.PinButton.ToolTip = isPinned ? "Unpin" : "Pin";
         cell.SetPinAlwaysVisible(isPinned);
     }
+
+    private static int MeasureWrappedLineCount(string text, NSTableView tableView)
+    {
+        var width = Math.Max(MIN_TEXT_WIDTH, (double)tableView.Bounds.Width);
+        using var nsText = new NSString(text);
+        var bounds = NSExtendedStringDrawing.GetBoundingRect(
+            nsText,
+            new CGSize((nfloat)width, 10_000),
+            NSStringDrawingOptions.UsesLineFragmentOrigin | NSStringDrawingOptions.UsesFontLeading,
+            RowTextAttributes,
+            null
+        );
+
+        return Math.Max(1, (int)Math.Ceiling((double)bounds.Height / MeasurementLineHeight));
+    }
+
+    private static nfloat HeightForLines(int lineCount) =>
+        (nfloat)(ROW_VERTICAL_PADDING + lineCount * ROW_SLOT_LINE_HEIGHT);
 
     private static string TrimForDisplay(string s)
     {

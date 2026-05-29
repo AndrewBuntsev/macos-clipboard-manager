@@ -5,6 +5,19 @@ namespace cbm;
 /// </summary>
 public sealed class HistoryTableView : NSTableView
 {
+    public override void SetFrameSize(CGSize newSize)
+    {
+        var oldWidth = Frame.Width;
+        base.SetFrameSize(newSize);
+
+        if (Math.Abs((double)(newSize.Width - oldWidth)) < 0.5 || RowCount <= 0)
+            return;
+
+        NoteHeightOfRowsWithIndexesChanged(
+            NSIndexSet.FromNSRange(new NSRange(0, RowCount))
+        );
+    }
+
     public override bool AcceptsFirstMouse(NSEvent theEvent)
     {
         // Allow right-clicks to act without first activating the window.
